@@ -17,6 +17,7 @@ export interface SimulationState {
   active: AlgorithmName;
   results: Record<AlgorithmName, AlgorithmResult | null>;
   isRunning: boolean;
+  errorMessage: string | null;
   playbackIndex: number;
   playbackActive: boolean;
   currentStep: AlgorithmStep | null;
@@ -29,6 +30,7 @@ export interface SimulationState {
   runAll: () => Promise<void>;
   reset: () => void;
   togglePlayback: () => void;
+  restartPlayback: () => void;
   setPlaybackSpeed: (speed: number) => void;
   setPlaybackIndex: (index: number) => void;
 }
@@ -40,6 +42,17 @@ const emptyResults: Record<AlgorithmName, AlgorithmResult | null> = {
   "branch-bound": null,
 };
 
+async function readErrorMessage(res: Response) {
+  try {
+    const payload = (await res.json()) as { error?: string };
+    if (typeof payload.error === "string" && payload.error.length > 0) {
+      return payload.error;
+    }
+  } catch {}
+
+  return `Simulation request failed (${res.status}).`;
+}
+
 export function useSimulation(): SimulationState {
   const [slots, setSlots] = useState<ParkingSlot[]>(SAMPLE_SLOTS);
   const [vehicles, setVehicles] = useState<Vehicle[]>(SAMPLE_VEHICLES);
@@ -47,13 +60,15 @@ export function useSimulation(): SimulationState {
   const [results, setResults] =
     useState<Record<AlgorithmName, AlgorithmResult | null>>(emptyResults);
   const [isRunning, setIsRunning] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [playbackIndex, setPlaybackIndex] = useState(-1);
   const [playbackActive, setPlaybackActive] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(2);
 
   const activeResult = results[active];
   const steps = activeResult?.steps ?? [];
-  const currentStep = playbackIndex >= 0 ? (steps[playbackIndex] ?? null) : null;
+  const currentStep =
+    playbackIndex >= 0 ? (steps[playbackIndex] ?? null) : null;
 
   // Interval-driven playback engine
   useEffect(() => {
@@ -76,11 +91,13 @@ export function useSimulation(): SimulationState {
     setActiveState(name);
     setPlaybackIndex(-1);
     setPlaybackActive(false);
+    setErrorMessage(null);
   }, []);
 
   const runOne = useCallback(
     async (name: AlgorithmName) => {
       setIsRunning(true);
+      setErrorMessage(null);
       setPlaybackIndex(-1);
       setPlaybackActive(false);
       try {
@@ -89,16 +106,20 @@ export function useSimulation(): SimulationState {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ algorithm: name, slots, vehicles }),
         });
-        if (res.ok) {
-          const r: AlgorithmResult = await res.json();
-          setResults((prev) => ({ ...prev, [name]: r }));
-          setActiveState(name);
-          // Start playback automatically after run
-          setPlaybackIndex(-1);
-          setPlaybackActive(true);
+
+        if (!res.ok) {
+          setErrorMessage(await readErrorMessage(res));
+          return;
         }
+
+        const r: AlgorithmResult = await res.json();
+        setResults((prev) => ({ ...prev, [name]: r }));
+        setActiveState(name);
+        setPlaybackIndex(r.steps.length > 0 ? 0 : -1);
+        setPlaybackActive(r.steps.length > 1);
       } catch (err) {
         console.error("runOne error:", err);
+        setErrorMessage("Could not reach the simulator API.");
       } finally {
         setIsRunning(false);
       }
@@ -108,9 +129,10 @@ export function useSimulation(): SimulationState {
 
   const runAll = useCallback(async () => {
     setIsRunning(true);
+    setErrorMessage(null);
     setPlaybackIndex(-1);
     setPlaybackActive(false);
-    const all = { ...results } as Record<AlgorithmName, AlgorithmResult>;
+    const all = { ...emptyResults };
     try {
       for (const n of ALGORITHM_ORDER) {
         const res = await fetch("/api/allocate", {
@@ -118,32 +140,50 @@ export function useSimulation(): SimulationState {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ algorithm: n, slots, vehicles }),
         });
-        if (res.ok) {
-          all[n] = await res.json();
+
+        if (!res.ok) {
+          setErrorMessage(await readErrorMessage(res));
+          return;
         }
+
+        all[n] = (await res.json()) as AlgorithmResult;
       }
+
       setResults(all);
-      // After running all, activate the greedy result and start playback
       setActiveState("greedy");
-      setPlaybackIndex(-1);
-      setPlaybackActive(true);
+      setPlaybackIndex(all.greedy?.steps.length ? 0 : -1);
+      setPlaybackActive((all.greedy?.steps.length ?? 0) > 1);
     } catch (err) {
       console.error("runAll error:", err);
+      setErrorMessage("Could not reach the simulator API.");
     } finally {
       setIsRunning(false);
     }
-  }, [slots, vehicles, results]);
+  }, [slots, vehicles]);
 
   const togglePlayback = useCallback(() => {
+    if (steps.length === 0) return;
+
     setPlaybackActive((prev) => {
-      if (!prev && playbackIndex >= steps.length - 1 && steps.length > 0) {
-        // Restart from beginning
-        setPlaybackIndex(-1);
-        return true;
+      if (prev) {
+        return false;
       }
-      return !prev;
+
+      if (playbackIndex < 0 || playbackIndex >= steps.length - 1) {
+        setPlaybackIndex(0);
+        return steps.length > 1;
+      }
+
+      return true;
     });
   }, [playbackIndex, steps.length]);
+
+  const restartPlayback = useCallback(() => {
+    if (steps.length === 0) return;
+
+    setPlaybackIndex(0);
+    setPlaybackActive(steps.length > 1);
+  }, [steps.length]);
 
   const toggleSlotOccupied = useCallback((id: number) => {
     setSlots((prev) =>
@@ -152,6 +192,7 @@ export function useSimulation(): SimulationState {
     setResults(emptyResults);
     setPlaybackIndex(-1);
     setPlaybackActive(false);
+    setErrorMessage(null);
   }, []);
 
   const reset = useCallback(() => {
@@ -161,6 +202,7 @@ export function useSimulation(): SimulationState {
     setActiveState("greedy");
     setPlaybackIndex(-1);
     setPlaybackActive(false);
+    setErrorMessage(null);
   }, []);
 
   return useMemo(
@@ -170,6 +212,7 @@ export function useSimulation(): SimulationState {
       active,
       results,
       isRunning,
+      errorMessage,
       playbackIndex,
       playbackActive,
       currentStep,
@@ -180,18 +223,21 @@ export function useSimulation(): SimulationState {
         setResults(emptyResults);
         setPlaybackIndex(-1);
         setPlaybackActive(false);
+        setErrorMessage(null);
       },
       setVehicles: (v) => {
         setVehicles(v);
         setResults(emptyResults);
         setPlaybackIndex(-1);
         setPlaybackActive(false);
+        setErrorMessage(null);
       },
       toggleSlotOccupied,
       runOne,
       runAll,
       reset,
       togglePlayback,
+      restartPlayback,
       setPlaybackSpeed,
       setPlaybackIndex,
     }),
@@ -201,6 +247,7 @@ export function useSimulation(): SimulationState {
       active,
       results,
       isRunning,
+      errorMessage,
       playbackIndex,
       playbackActive,
       currentStep,
@@ -211,6 +258,7 @@ export function useSimulation(): SimulationState {
       toggleSlotOccupied,
       reset,
       togglePlayback,
+      restartPlayback,
     ],
   );
 }

@@ -1,7 +1,11 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import type { Assignment, Vehicle, AlgorithmStep } from "@/lib/algorithms/types";
+import type {
+  Assignment,
+  Vehicle,
+  AlgorithmStep,
+} from "@/lib/algorithms/types";
 import { cn } from "@/lib/utils";
 import { Accessibility, Car, Plug } from "lucide-react";
 
@@ -15,13 +19,23 @@ interface Props {
 const typeIcon = { G: Car, H: Accessibility, E: Plug } as const;
 const typeName = { G: "General", H: "Accessible", E: "EV" } as const;
 
-export function VehicleQueue({ vehicles, assignments, currentStep, isPlayback }: Props) {
+export function VehicleQueue({
+  vehicles,
+  assignments,
+  currentStep,
+  isPlayback,
+}: Props) {
   const assignedMap = new Map(assignments.map((a) => [a.vehicleId, a]));
   const sorted = [...vehicles].sort((a, b) => a.priority - b.priority);
 
-  // During playback, only show assignments made so far (up to the current step)
   const activeVehicleId = currentStep?.vehicleId;
-  const assigningSlotId = currentStep?.slotId;
+  const activeStepLabel = currentStep
+    ? currentStep.kind === "assign"
+      ? `Assigning vehicle ${currentStep.vehicleId ?? "?"} to slot #${currentStep.slotId ?? "?"}`
+      : currentStep.kind === "done"
+        ? "Playback complete"
+        : `Evaluating slot #${currentStep.slotId ?? "?"}`
+    : "Waiting to start";
 
   return (
     <div className="card-soft p-6 flex flex-col gap-4">
@@ -35,11 +49,21 @@ export function VehicleQueue({ vehicles, assignments, currentStep, isPlayback }:
         <div className="flex items-center gap-2">
           <Badge variant="default">{sorted.length} vehicles</Badge>
           {isPlayback && (
-            <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700 bg-amber-50">
+            <Badge
+              variant="outline"
+              className="text-[10px] border-amber-300 text-amber-700 bg-amber-50"
+            >
               Live
             </Badge>
           )}
         </div>
+      </div>
+
+      <div className="rounded-2xl border border-line bg-[linear-gradient(135deg,rgba(255,255,255,0.9),rgba(245,241,234,0.95))] px-4 py-3 shadow-[0_1px_0_rgba(255,255,255,0.7)_inset]">
+        <div className="text-[10px] uppercase tracking-[0.16em] text-subtle">
+          Live status
+        </div>
+        <div className="mt-1 text-sm text-ink">{activeStepLabel}</div>
       </div>
 
       <ol className="space-y-2">
@@ -47,9 +71,8 @@ export function VehicleQueue({ vehicles, assignments, currentStep, isPlayback }:
           const Icon = typeIcon[v.type];
           const a = assignedMap.get(v.id);
 
-          // during playback, dim vehicles that haven't been processed yet
           const isCurrentlyActive = isPlayback && activeVehicleId === v.id;
-          const isAssigned = !isPlayback ? !!a : !!a;
+          const isAssigned = !!a;
 
           return (
             <li
@@ -93,7 +116,10 @@ export function VehicleQueue({ vehicles, assignments, currentStep, isPlayback }:
                 </div>
               </div>
               {isCurrentlyActive ? (
-                <Badge variant="outline" className="border-amber-400 text-amber-700 bg-amber-50 shrink-0">
+                <Badge
+                  variant="outline"
+                  className="border-amber-400 text-amber-700 bg-amber-50 shrink-0"
+                >
                   Checking…
                 </Badge>
               ) : isAssigned ? (
@@ -102,7 +128,7 @@ export function VehicleQueue({ vehicles, assignments, currentStep, isPlayback }:
                 </Badge>
               ) : (
                 <Badge variant="outline" className="shrink-0 text-subtle">
-                  waiting
+                  queued
                 </Badge>
               )}
             </li>

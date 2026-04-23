@@ -3,7 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ALGORITHM_META, ALGORITHM_ORDER } from "@/lib/algorithms";
-import type { AlgorithmName } from "@/lib/algorithms/types";
+import type {
+  AlgorithmName,
+  AlgorithmResult,
+  Assignment,
+} from "@/lib/algorithms/types";
 import { SimulatorSidebar } from "@/components/simulator/simulator-sidebar";
 import { RunBar } from "@/components/simulator/run-bar";
 import { ParkingMap } from "@/components/simulator/parking-map";
@@ -12,16 +16,50 @@ import { ComparisonTable } from "@/components/simulator/comparison-table";
 import { ExecutionLog } from "@/components/simulator/execution-log";
 import { useSimulation } from "@/hooks/use-simulation";
 
+function getVisibleAssignments(
+  result: AlgorithmResult | null,
+  playbackIndex: number,
+): Assignment[] {
+  if (!result) return [];
+  if (playbackIndex < 0) return result.assignments;
+  if (playbackIndex >= result.steps.length - 1) return result.assignments;
+
+  const committed = new Set<string>();
+
+  for (let index = 0; index <= playbackIndex; index += 1) {
+    const step = result.steps[index];
+    if (
+      step?.kind === "assign" &&
+      step.vehicleId !== undefined &&
+      step.slotId !== undefined
+    ) {
+      committed.add(`${step.vehicleId}:${step.slotId}`);
+    }
+  }
+
+  return result.assignments.filter((assignment) =>
+    committed.has(`${assignment.vehicleId}:${assignment.slotId}`),
+  );
+}
+
 export function SimulatorShell() {
   const sim = useSimulation();
   const activeResult = sim.results[sim.active];
   const [mapKey, setMapKey] = useState(0);
+  const playbackPreview =
+    sim.playbackIndex >= 0 && sim.currentStep?.kind !== "done";
+  const visibleAssignments = playbackPreview
+    ? getVisibleAssignments(activeResult, sim.playbackIndex)
+    : (activeResult?.assignments ?? []);
 
   // bump map key whenever algorithm changes or a run completes to restart CSS animations
   const prevActive = useRef(sim.active);
   const prevResult = useRef(activeResult);
   useEffect(() => {
-    if (prevActive.current !== sim.active || prevResult.current !== activeResult) {
+    if (
+      prevActive.current !== sim.active ||
+      prevResult.current !== activeResult
+    ) {
       setMapKey((k) => k + 1);
       prevActive.current = sim.active;
       prevResult.current = activeResult;
@@ -53,7 +91,7 @@ export function SimulatorShell() {
               <ParkingMap
                 slots={sim.slots}
                 vehicles={sim.vehicles}
-                assignments={activeResult?.assignments ?? []}
+                assignments={visibleAssignments}
                 onToggle={sim.toggleSlotOccupied}
                 currentStep={sim.currentStep}
               />
@@ -61,16 +99,19 @@ export function SimulatorShell() {
             <div className="min-w-0">
               <VehicleQueue
                 vehicles={sim.vehicles}
-                assignments={activeResult?.assignments ?? []}
+                assignments={visibleAssignments}
                 currentStep={sim.currentStep}
-                isPlayback={sim.playbackIndex >= 0 && !sim.playbackActive ? false : sim.playbackIndex >= 0}
+                isPlayback={playbackPreview}
               />
             </div>
           </div>
 
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,560px)]">
             <div className="min-w-0">
-              <ExecutionLog result={activeResult} playbackIndex={sim.playbackIndex} />
+              <ExecutionLog
+                result={activeResult}
+                playbackIndex={sim.playbackIndex}
+              />
             </div>
             <div className="min-w-0">
               <ComparisonTable
